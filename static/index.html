@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Measure Magician</title>
+</head>
+<body>
+  <h1>🎼 Measure Magician</h1>
+  <form id="upload-form">
+    <input type="file" id="image" accept="image/png, image/jpeg" />
+    <button type="submit">Upload and Number</button>
+  </form>
+  <br>
+  <img id="output" style="max-width: 100%; height: auto;" />
+  <script>
+    const form = document.getElementById('upload-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const file = document.getElementById('image').files[0];
+      const formData = new FormData();
+      formData.append('image', file);
+
+      const res = await fetch('/upload', {
+        method: 'POST',
+        body: formData
+      });
+
+      const blob = await res.blob();
+      const imgUrl = URL.createObjectURL(blob);
+      document.getElementById('output').src = imgUrl;
+    });
+  </script>
+</body>
+</html>
