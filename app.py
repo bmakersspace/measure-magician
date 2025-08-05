@@ -4,6 +4,8 @@ import numpy as np
 import io
 import math
 from sklearn.cluster import AgglomerativeClustering
+import zipfile
+from flask import Response
 
 app = Flask(__name__, static_url_path='', static_folder='static')
 
@@ -140,56 +142,72 @@ def find_staff_vertical_bounds(system_img):
 
 @app.route("/upload", methods=["POST"])
 def process_image():
-    clef_type = request.form.get('clef_type', 'double')
+    uploaded_files = request.files.getlist("image")
+    clef_type = request.form.get("clef_type", "double")
 
-    if clef_type == 'double':
-        min_bar_height = 100
-    else:
-        min_bar_height = 40  # for single clef, allow shorter bars
+    min_bar_height = 100 if clef_type == "double" else 40
+    processed_images = []
+    
+    global_measure_count = request.form.get("measure_start", None)
+    measure_count = int(global_measure_count) if global_measure_count else 1  # <-- stay persistent
 
-    file = request.files['image']
-    np_img = np.frombuffer(file.read(), np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    for file in uploaded_files:
+        np_img = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    system_count = 5  # adjust as needed
-    system_bounds = find_system_bounds(gray, system_count)
-    measure_count = 1
+        system_bounds = find_system_bounds(gray, expected_system_count=5)
 
-    for top, bottom in system_bounds:
-        system_img = gray[top:bottom]
-        top_staff, bottom_staff = find_staff_vertical_bounds(system_img)
+        for top, bottom in system_bounds:
+            system_img = gray[top:bottom]
+            top_staff, bottom_staff = find_staff_vertical_bounds(system_img)
 
-        xs = detect_barlines_with_thickness_filter(system_img, top_staff, bottom_staff, min_height=min_bar_height)
+            barlines = detect_barlines_with_thickness_filter(system_img, top_staff, bottom_staff, min_bar_height)
 
-        # Remove the rightmost bar line (if any)
-        if xs:
-            xs = xs[:-1]
+            if barlines:
+                barlines = barlines[:-1]  # Remove rightmost
 
-        prev_x = -100
-        min_dist = 15
+            prev_x = -100
+            min_dist = 15
 
-        for x, is_thick in xs:  # xs is list of tuples now
-            if x - prev_x > min_dist:
+            for x, is_thick in barlines:
                 if is_thick:
-                    print(f"Skipping annotation for thick bar at x={x}")
                     continue
+                if x - prev_x > min_dist:
+                    cv2.line(img, (x, top + top_staff), (x, top + bottom_staff), (255, 0, 0), 1)
+                    cv2.putText(
+                        img,
+                        str(measure_count),
+                        (x + 5, top + top_staff - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2
+                    )
+                    measure_count += 1
+                    prev_x = x
 
-                cv2.line(img, (x, top + top_staff), (x, top + bottom_staff), (255, 0, 0), 1)
-                cv2.putText(
-                    img,
-                    str(measure_count),
-                    (x + 5, top + top_staff - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 0, 255),
-                    2
-                )
-                measure_count += 1
-                prev_x = x
+        _, img_encoded = cv2.imencode('.png', img)
+        processed_images.append(img_encoded.tobytes())
 
-    _, img_encoded = cv2.imencode('.png', img)
-    return send_file(io.BytesIO(img_encoded.tobytes()), mimetype='image/png')
+    # Return single PNG if only one file was uploaded
+    if len(processed_images) == 1:
+        return send_file(io.BytesIO(processed_images[0]), mimetype='image/png')
 
+    # Prepare zip archive in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
+        for idx, img_bytes in enumerate(processed_images):
+            zip_file.writestr(f"numbered_page_{idx + 1}.png", img_bytes)
+
+    zip_buffer.seek(0)
+
+    return Response(
+        zip_buffer,
+        mimetype='application/zip',
+        headers={
+            'Content-Disposition': 'attachment; filename=numbered_pages.zip'
+        }
+    )
 if __name__ == "__main__":
     app.run(debug=True)

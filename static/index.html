@@ -2,6 +2,7 @@
 <html>
 <head>
   <title>Measure Magician</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -45,11 +46,29 @@
       background-color: #45a049;
     }
 
-    #output {
-      max-width: 90%;
+    .preview-container, .output-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .preview-container img, .output-container img {
+      max-width: 200px;
       height: auto;
       border: 1px solid #ccc;
-      box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+      box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    #download-all {
+      margin-top: 30px;
+      padding: 12px 20px;
+      background-color: #007bff;
+    }
+
+    #download-all:hover {
+      background-color: #0069d9;
     }
   </style>
 </head>
@@ -62,20 +81,54 @@
       <option value="single">Single Clef</option>
     </select>
 
-    <input type="file" id="image" accept="image/png, image/jpeg" />
+    <input type="file" id="image" accept="image/png, image/jpeg" multiple />
+    <div class="preview-container" id="preview-container"></div>
+
     <button type="submit">Upload and Number</button>
   </form>
 
-  <img id="output" />
+  <div class="output-container" id="output-container"></div>
+
+  <button id="download-all" style="display: none;">📦 Download All Numbered Images</button>
+  <button id="print-all" style="margin-top: 10px; display: none;">🖨️ Print All</button>
 
   <script>
     const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('image');
+    const previewContainer = document.getElementById('preview-container');
+    const outputContainer = document.getElementById('output-container');
+    const downloadBtn = document.getElementById('download-all');
+    const printBtn = document.getElementById('print-all');
+
+    let processedBlobs = [];
+
+    fileInput.addEventListener('change', () => {
+      previewContainer.innerHTML = '';
+      outputContainer.innerHTML = '';
+      processedBlobs = [];
+      downloadBtn.style.display = 'none';
+      printBtn.style.display = 'none';
+
+      const files = Array.from(fileInput.files);
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          previewContainer.appendChild(img);
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const file = document.getElementById('image').files[0];
+
+      const files = Array.from(fileInput.files);
       const clefType = document.getElementById('clef-type').value;
+
       const formData = new FormData();
-      formData.append('image', file);
+      files.forEach(file => formData.append('image', file));
       formData.append('clef_type', clefType);
 
       const res = await fetch('/upload', {
@@ -83,9 +136,69 @@
         body: formData
       });
 
-      const blob = await res.blob();
-      const imgUrl = URL.createObjectURL(blob);
-      document.getElementById('output').src = imgUrl;
+      const zipBlob = await res.blob();
+
+      // Store blob for later printing/downloading
+      processedBlobs = [{ name: 'numbered_pages.zip', blob: zipBlob }];
+
+      downloadBtn.style.display = 'inline-block';
+      printBtn.style.display = 'inline-block';
+    });
+
+    downloadBtn.addEventListener('click', async () => {
+      const blob = processedBlobs[0].blob;
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = processedBlobs[0].name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    printBtn.addEventListener('click', () => {
+      if (processedBlobs.length === 0) return;
+
+      const zip = new JSZip();
+      zip.loadAsync(processedBlobs[0].blob).then((zipContent) => {
+        const printWindow = window.open('', '_blank');
+        const styles = `
+          <style>
+            @media print {
+              body { margin: 0; padding: 0; }
+              .page { page-break-after: always; text-align: center; }
+              img { max-width: 100%; max-height: 100vh; width: auto; height: auto; }
+            }
+            body { margin: 0; padding: 0; background: white; }
+            .page { display: flex; justify-content: center; align-items: center; height: 100vh; box-sizing: border-box; }
+          </style>
+        `;
+
+        let html = `<html><head><title>Print Numbered Sheets</title>${styles}</head><body>`;
+
+        const imagePromises = [];
+        zip.forEach((relativePath, file) => {
+          imagePromises.push(
+            file.async('blob').then(blob => {
+              const url = URL.createObjectURL(blob);
+              html += `<div class="page"><img src="${url}" /></div>`;
+            })
+          );
+        });
+
+        Promise.all(imagePromises).then(() => {
+          html += '</body></html>';
+          printWindow.document.write(html);
+          printWindow.document.close();
+
+          printWindow.onload = () => {
+            printWindow.focus();
+            printWindow.print();
+          };
+        });
+      });
     });
   </script>
 </body>
