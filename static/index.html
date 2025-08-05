@@ -81,6 +81,8 @@
       <option value="single">Single Clef</option>
     </select>
 
+    <input type="hidden" id="measure-start" value="1">
+
     <input type="file" id="image" accept="image/png, image/jpeg" multiple />
     <div class="preview-container" id="preview-container"></div>
 
@@ -92,114 +94,141 @@
   <button id="download-all" style="display: none;">📦 Download All Numbered Images</button>
   <button id="print-all" style="margin-top: 10px; display: none;">🖨️ Print All</button>
 
-  <script>
-    const form = document.getElementById('upload-form');
-    const fileInput = document.getElementById('image');
-    const previewContainer = document.getElementById('preview-container');
-    const outputContainer = document.getElementById('output-container');
-    const downloadBtn = document.getElementById('download-all');
-    const printBtn = document.getElementById('print-all');
+<script>
+  const form = document.getElementById('upload-form');
+  const fileInput = document.getElementById('image');
+  const previewContainer = document.getElementById('preview-container');
+  const outputContainer = document.getElementById('output-container');
+  const downloadBtn = document.getElementById('download-all');
+  const printBtn = document.getElementById('print-all');
 
-    let processedBlobs = [];
+  let processedBlobs = [];
 
-    fileInput.addEventListener('change', () => {
-      previewContainer.innerHTML = '';
-      outputContainer.innerHTML = '';
-      processedBlobs = [];
-      downloadBtn.style.display = 'none';
-      printBtn.style.display = 'none';
+  fileInput.addEventListener('change', () => {
+    previewContainer.innerHTML = '';
+    outputContainer.innerHTML = '';
+    processedBlobs = [];
+    downloadBtn.style.display = 'none';
+    printBtn.style.display = 'none';
 
-      const files = Array.from(fileInput.files);
-      files.forEach(file => {
-        const reader = new FileReader();
-        reader.onload = e => {
-          const img = document.createElement('img');
-          img.src = e.target.result;
-          previewContainer.appendChild(img);
-        };
-        reader.readAsDataURL(file);
-      });
+    const files = Array.from(fileInput.files);
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = document.createElement('img');
+        img.src = e.target.result;
+        previewContainer.appendChild(img);
+      };
+      reader.readAsDataURL(file);
+    });
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const files = Array.from(fileInput.files);
+    if (files.length === 0) {
+      alert('Please select at least one image.');
+      return;
+    }
+
+    const clefType = document.getElementById('clef-type').value;
+    const measureStart = document.getElementById('measure-start').value;
+
+    outputContainer.innerHTML = '';
+    processedBlobs = [];
+    downloadBtn.style.display = 'none';
+    printBtn.style.display = 'none';
+
+    const formData = new FormData();
+    files.forEach(file => formData.append('image', file));
+    formData.append('clef_type', clefType);
+    formData.append('measure_start', measureStart);
+
+    const res = await fetch('/upload', {
+      method: 'POST',
+      body: formData
     });
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
+    const blob = await res.blob();
 
-      const files = Array.from(fileInput.files);
-      const clefType = document.getElementById('clef-type').value;
+    // If only one file was uploaded, server returns single PNG; else ZIP
+    if (blob.type === 'application/zip') {
+      processedBlobs.push({ name: 'numbered_pages.zip', blob });
+      downloadBtn.style.display = 'inline-block';
+      printBtn.style.display = 'inline-block';
 
-      const formData = new FormData();
-      files.forEach(file => formData.append('image', file));
-      formData.append('clef_type', clefType);
+      // For ZIP, no image preview because it's multiple pages
+      outputContainer.innerHTML = '<p>Multiple pages processed. Use download or print buttons.</p>';
+    } else if (blob.type === 'image/png') {
+      processedBlobs.push({ name: `numbered_${files[0].name}`, blob });
 
-      const res = await fetch('/upload', {
-        method: 'POST',
-        body: formData
-      });
-
-      const zipBlob = await res.blob();
-
-      // Store blob for later printing/downloading
-      processedBlobs = [{ name: 'numbered_pages.zip', blob: zipBlob }];
+      const imgUrl = URL.createObjectURL(blob);
+      const img = document.createElement('img');
+      img.src = imgUrl;
+      outputContainer.appendChild(img);
 
       downloadBtn.style.display = 'inline-block';
       printBtn.style.display = 'inline-block';
-    });
+    } else {
+      outputContainer.innerHTML = '<p>Unexpected response type.</p>';
+    }
+  });
 
-    downloadBtn.addEventListener('click', async () => {
-      const blob = processedBlobs[0].blob;
-      const url = URL.createObjectURL(blob);
+  downloadBtn.addEventListener('click', () => {
+    if (processedBlobs.length === 0) return;
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = processedBlobs[0].name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    });
+    const blob = processedBlobs[0].blob;
+    const url = URL.createObjectURL(blob);
 
-    printBtn.addEventListener('click', () => {
-      if (processedBlobs.length === 0) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = processedBlobs[0].name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
 
-      const zip = new JSZip();
-      zip.loadAsync(processedBlobs[0].blob).then((zipContent) => {
-        const printWindow = window.open('', '_blank');
-        const styles = `
-          <style>
-            @media print {
-              body { margin: 0; padding: 0; }
-              .page { page-break-after: always; text-align: center; }
-              img { max-width: 100%; max-height: 100vh; width: auto; height: auto; }
-            }
-            body { margin: 0; padding: 0; background: white; }
-            .page { display: flex; justify-content: center; align-items: center; height: 100vh; box-sizing: border-box; }
-          </style>
-        `;
+  printBtn.addEventListener('click', () => {
+    if (processedBlobs.length === 0) return;
 
-        let html = `<html><head><title>Print Numbered Sheets</title>${styles}</head><body>`;
+    const blob = processedBlobs[0].blob;
 
-        const imagePromises = [];
-        zip.forEach((relativePath, file) => {
-          imagePromises.push(
-            file.async('blob').then(blob => {
-              const url = URL.createObjectURL(blob);
-              html += `<div class="page"><img src="${url}" /></div>`;
-            })
-          );
-        });
+    // If it's a zip, extracting and printing images client-side is complex,
+    // so just open the zip or ask user to unzip & print.
+    if (blob.type === 'application/zip') {
+      alert('Printing multiple pages from ZIP is not supported directly. Please download and print manually.');
+      return;
+    }
 
-        Promise.all(imagePromises).then(() => {
-          html += '</body></html>';
-          printWindow.document.write(html);
-          printWindow.document.close();
+    const imgUrl = URL.createObjectURL(blob);
+    const printWindow = window.open('', '_blank');
+    const styles = `
+      <style>
+        @media print {
+          body { margin: 0; padding: 0; }
+          .page { page-break-after: always; text-align: center; }
+          img { max-width: 100%; max-height: 100vh; width: auto; height: auto; }
+        }
+        body { margin: 0; padding: 0; background: white; }
+        .page { display: flex; justify-content: center; align-items: center; height: 100vh; box-sizing: border-box; }
+      </style>
+    `;
 
-          printWindow.onload = () => {
-            printWindow.focus();
-            printWindow.print();
-          };
-        });
-      });
-    });
-  </script>
+    const html = `<html><head><title>Print Numbered Sheet</title>${styles}</head><body>
+      <div class="page"><img src="${imgUrl}" /></div>
+    </body></html>`;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+
+    printWindow.onload = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
+  });
+</script>
+
 </body>
 </html>
