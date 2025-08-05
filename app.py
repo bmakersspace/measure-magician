@@ -67,7 +67,7 @@ def measure_bar_total_thickness(gray_img, x, top_staff, bottom_staff, darkness_t
 
     return total_thickness
 
-def detect_barlines_with_thickness_filter(gray, top_staff, bottom_staff):
+def detect_barlines_with_thickness_filter(gray, top_staff, bottom_staff, min_height=100):
     edges = cv2.Canny(gray, 30, 120, apertureSize=3)
     lines = cv2.HoughLinesP(
         edges,
@@ -85,7 +85,7 @@ def detect_barlines_with_thickness_filter(gray, top_staff, bottom_staff):
     for x1, y1, x2, y2 in lines[:, 0]:
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
         height = abs(y2 - y1)
-        if abs(angle) > 80 and height >= 100 and x1 > 20:
+        if abs(angle) > 80 and height >= min_height and x1 > 20:
             xs.append((x1 + x2) // 2)
 
     xs = sorted(xs)
@@ -140,6 +140,13 @@ def find_staff_vertical_bounds(system_img):
 
 @app.route("/upload", methods=["POST"])
 def process_image():
+    clef_type = request.form.get('clef_type', 'double')
+
+    if clef_type == 'double':
+        min_bar_height = 100
+    else:
+        min_bar_height = 40  # for single clef, allow shorter bars
+
     file = request.files['image']
     np_img = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
@@ -153,7 +160,7 @@ def process_image():
         system_img = gray[top:bottom]
         top_staff, bottom_staff = find_staff_vertical_bounds(system_img)
 
-        xs = detect_barlines_with_thickness_filter(system_img, top_staff, bottom_staff)
+        xs = detect_barlines_with_thickness_filter(system_img, top_staff, bottom_staff, min_height=min_bar_height)
 
         # Remove the rightmost bar line (if any)
         if xs:

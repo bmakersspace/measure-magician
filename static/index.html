@@ -2,22 +2,81 @@
 <html>
 <head>
   <title>Measure Magician</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 2.5em;
+      color: #333;
+    }
+
+    #upload-form {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+
+    select, input[type="file"], button {
+      font-size: 1em;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      background-color: #4caf50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #45a049;
+    }
+
+    #output {
+      max-width: 90%;
+      height: auto;
+      border: 1px solid #ccc;
+      box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+    }
+  </style>
 </head>
 <body>
   <h1>🎼 Measure Magician</h1>
+
   <form id="upload-form">
+    <select id="clef-type">
+      <option value="double">Double Clef</option>
+      <option value="single">Single Clef</option>
+    </select>
+
     <input type="file" id="image" accept="image/png, image/jpeg" />
     <button type="submit">Upload and Number</button>
   </form>
-  <br>
-  <img id="output" style="max-width: 100%; height: auto;" />
+
+  <img id="output" />
+
   <script>
     const form = document.getElementById('upload-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const file = document.getElementById('image').files[0];
+      const clefType = document.getElementById('clef-type').value;
       const formData = new FormData();
       formData.append('image', file);
+      formData.append('clef_type', clefType);
 
       const res = await fetch('/upload', {
         method: 'POST',
