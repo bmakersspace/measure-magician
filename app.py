@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, render_template, jsonify
 import cv2
 import numpy as np
 import io
@@ -187,8 +187,9 @@ def process_image():
                 prev_x = x
 
     _, img_encoded = cv2.imencode('.png', img)
-    return send_file(io.BytesIO(img_encoded.tobytes()), mimetype='image/png')
-
+    response = send_file(io.BytesIO(img_encoded.tobytes()), mimetype='image/png')
+    response.headers['X-Measure-Count'] = str(measure_count)  # Add custom header
+    return response
 
     # If only one, send PNG normally
     return send_file(io.BytesIO(processed_images[0]), mimetype='image/png')

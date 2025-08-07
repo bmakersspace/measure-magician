@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <title>Measure Magician</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -28,7 +29,9 @@
       margin-bottom: 30px;
     }
 
-    select, input[type="file"], button {
+    select,
+    input[type="file"],
+    button {
       font-size: 1em;
       padding: 10px;
       border-radius: 5px;
@@ -46,7 +49,8 @@
       background-color: #45a049;
     }
 
-    .preview-container, .output-container {
+    .preview-container,
+    .output-container {
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
@@ -54,7 +58,8 @@
       margin-top: 10px;
     }
 
-    .preview-container img, .output-container img {
+    .preview-container img,
+    .output-container img {
       max-width: 200px;
       height: auto;
       border: 1px solid #ccc;
@@ -72,6 +77,7 @@
     }
   </style>
 </head>
+
 <body>
   <h1>🎼 Measure Magician</h1>
 
@@ -94,37 +100,39 @@
   <button id="download-all" style="display: none;">📦 Download All Numbered Images</button>
   <button id="print-all" style="margin-top: 10px; display: none;">🖨️ Print All</button>
 
-<script>
-  const form = document.getElementById('upload-form');
-  const fileInput = document.getElementById('image');
-  const previewContainer = document.getElementById('preview-container');
-  const outputContainer = document.getElementById('output-container');
-  const downloadBtn = document.getElementById('download-all');
-  const printBtn = document.getElementById('print-all');
+  <script>
+    const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('image');
+    const previewContainer = document.getElementById('preview-container');
+    const outputContainer = document.getElementById('output-container');
+    const downloadBtn = document.getElementById('download-all');
+    const printBtn = document.getElementById('print-all');
 
-  let processedBlobs = [];
+    let processedBlobs = [];
 
-  fileInput.addEventListener('change', () => {
-    previewContainer.innerHTML = '';
-    outputContainer.innerHTML = '';
-    processedBlobs = [];
-    downloadBtn.style.display = 'none';
-    printBtn.style.display = 'none';
+    fileInput.addEventListener('change', () => {
+      previewContainer.innerHTML = '';
+      outputContainer.innerHTML = '';
+      processedBlobs = [];
+      downloadBtn.style.display = 'none';
+      printBtn.style.display = 'none';
 
-    const files = Array.from(fileInput.files);
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = e => {
-        const img = document.createElement('img');
-        img.src = e.target.result;
-        previewContainer.appendChild(img);
-      };
-      reader.readAsDataURL(file);
+      const files = Array.from(fileInput.files);
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          previewContainer.appendChild(img);
+        };
+        reader.readAsDataURL(file);
+      });
     });
-  });
 
-  form.addEventListener('submit', async (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
+
+      
 
       const files = Array.from(fileInput.files);
       const clefType = document.getElementById('clef-type').value;
@@ -137,13 +145,16 @@
         const formData = new FormData();
         formData.append('image', files[i]);
         formData.append('clef_type', clefType);
-        formData.append('measure_start', measureStart);
+        formData.append('measure_start', document.getElementById("measure-start").value);
 
         const res = await fetch('/upload', {
           method: 'POST',
           body: formData
         });
 
+
+        const measureCount = res.headers.get("X-Measure-Count");
+        document.getElementById("measure-start").value = measureCount;
         const blob = await res.blob();
         const name = `numbered_page_${i + 1}.png`;
         processedBlobs.push({ name, blob });
@@ -162,7 +173,7 @@
 
 
 
-  downloadBtn.addEventListener('click', async () => {
+    downloadBtn.addEventListener('click', async () => {
       if (processedBlobs.length === 0) return;
 
       if (processedBlobs.length === 1) {
@@ -194,7 +205,7 @@
     });
 
 
-  printBtn.addEventListener('click', () => {
+    printBtn.addEventListener('click', () => {
       if (processedBlobs.length === 0) return;
 
       const printWindow = window.open('', '_blank');
@@ -228,7 +239,9 @@
       };
     });
 
-</script>
+    
+  </script>
 
 </body>
+
 </html>
