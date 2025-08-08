@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Measure Magician</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 2.5em;
+      color: #333;
+    }
+
+    #upload-form {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+
+    select,
+    input[type="file"],
+    button {
+      font-size: 1em;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      background-color: #4caf50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #45a049;
+    }
+
+    .preview-container,
+    .output-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .preview-container img,
+    .output-container img {
+      max-width: 200px;
+      height: auto;
+      border: 1px solid #ccc;
+      box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    #download-all {
+      margin-top: 30px;
+      padding: 12px 20px;
+      background-color: #007bff;
+    }
+
+    #download-all:hover {
+      background-color: #0069d9;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>🎼 Measure Magician</h1>
+
+  <form id="upload-form">
+    <select id="clef-type">
+      <option value="double">Double Clef</option>
+      <option value="single">Single Clef</option>
+    </select>
+
+    <input type="hidden" id="measure-start" value="1">
+
+    <input type="file" id="image" accept="image/png, image/jpeg" multiple />
+    <div class="preview-container" id="preview-container"></div>
+
+    <button type="submit">Upload and Number</button>
+  </form>
+
+  <div class="output-container" id="output-container"></div>
+
+  <button id="download-all" style="display: none;">📦 Download All Numbered Images</button>
+  <button id="print-all" style="margin-top: 10px; display: none;">🖨️ Print All</button>
+
+  <script>
+    const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('image');
+    const previewContainer = document.getElementById('preview-container');
+    const outputContainer = document.getElementById('output-container');
+    const downloadBtn = document.getElementById('download-all');
+    const printBtn = document.getElementById('print-all');
+
+    let processedBlobs = [];
+
+    fileInput.addEventListener('change', () => {
+      previewContainer.innerHTML = '';
+      outputContainer.innerHTML = '';
+      processedBlobs = [];
+      downloadBtn.style.display = 'none';
+      printBtn.style.display = 'none';
+
+      const files = Array.from(fileInput.files);
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          previewContainer.appendChild(img);
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      
+
+      const files = Array.from(fileInput.files);
+      const clefType = document.getElementById('clef-type').value;
+      const measureStart = document.getElementById('measure-start').value;
+
+      outputContainer.innerHTML = '';
+      processedBlobs = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const formData = new FormData();
+        formData.append('image', files[i]);
+        formData.append('clef_type', clefType);
+        formData.append('measure_start', document.getElementById("measure-start").value);
+
+        const res = await fetch('/upload', {
+          method: 'POST',
+          body: formData
+        });
+
+
+        const measureCount = res.headers.get("X-Measure-Count");
+        document.getElementById("measure-start").value = measureCount;
+        const blob = await res.blob();
+        const name = `numbered_page_${i + 1}.png`;
+        processedBlobs.push({ name, blob });
+
+        const imgUrl = URL.createObjectURL(blob);
+        const img = document.createElement('img');
+        img.src = imgUrl;
+        outputContainer.appendChild(img);
+      }
+
+      if (processedBlobs.length > 0) {
+        downloadBtn.style.display = 'inline-block';
+        printBtn.style.display = 'inline-block';
+      }
+    });
+
+
+
+    downloadBtn.addEventListener('click', async () => {
+      if (processedBlobs.length === 0) return;
+
+      if (processedBlobs.length === 1) {
+        const blob = processedBlobs[0].blob;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = processedBlobs[0].name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        const zip = new JSZip();
+        processedBlobs.forEach(({ name, blob }) => {
+          zip.file(name, blob);
+        });
+
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const zipUrl = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = zipUrl;
+        a.download = "numbered_pages.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(zipUrl);
+      }
+    });
+
+
+    printBtn.addEventListener('click', () => {
+      if (processedBlobs.length === 0) return;
+
+      const printWindow = window.open('', '_blank');
+      const styles = `
+    <style>
+      @media print {
+        body { margin: 0; padding: 0; }
+        .page { page-break-after: always; text-align: center; }
+        img { max-width: 100%; max-height: 100vh; width: auto; height: auto; }
+      }
+      body { margin: 0; padding: 0; background: white; }
+      .page { display: flex; justify-content: center; align-items: center; height: 100vh; box-sizing: border-box; }
+    </style>
+  `;
+
+      let html = `<html><head><title>Print Numbered Sheets</title>${styles}</head><body>`;
+
+      processedBlobs.forEach(({ blob }) => {
+        const imgUrl = URL.createObjectURL(blob);
+        html += `<div class="page"><img src="${imgUrl}" /></div>`;
+      });
+
+      html += '</body></html>';
+
+      printWindow.document.write(html);
+      printWindow.document.close();
+
+      printWindow.onload = () => {
+        printWindow.focus();
+        printWindow.print();
+      };
+    });
+
+    
+  </script>
+
+</body>
+
+</html>
