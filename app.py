@@ -1,12 +1,16 @@
-from flask import Flask, request, send_file, render_template, jsonify
+from flask import Flask, request, send_file, make_response
 import cv2
 import numpy as np
 import io
-import math
-from sklearn.cluster import AgglomerativeClustering
-import zipfile
-from flask import Response
-from flask import make_response
+import os
+import requests
+import uuid
+
+# Roboflow API
+ROBOFLOW_API_KEY = "vYtPQ7BRfeDKCfXexpT5"  # Replace with your API key
+MODEL_SINGLE = "mmv3-ati6o/7"  # Replace with your model ID
+MODEL_DOUBLE = "mmv3-ati6o/7"  # Replace with your model ID
+API_URL = "https://detect.roboflow.com"
 
 app = Flask(__name__, static_url_path='', static_folder='static')
 
@@ -14,184 +18,177 @@ app = Flask(__name__, static_url_path='', static_folder='static')
 def index():
     return app.send_static_file('index.html')
 
-def find_system_bounds(gray_img, expected_system_count=5):
-    hist = cv2.reduce(gray_img, 1, cv2.REDUCE_AVG).flatten()
-    threshold = 230
-    dark_rows = np.where(hist < threshold)[0]
+def crop_horizontal_whitespace(gray_img, threshold=250):
+    col_means = cv2.reduce(gray_img, 0, cv2.REDUCE_AVG).flatten()
+    dark_cols = np.where(col_means < threshold)[0]
+    if len(dark_cols) == 0:
+        return 0, gray_img.shape[1]
+    left, right = dark_cols.min(), dark_cols.max()
+    return left-15, right
 
-    if len(dark_rows) == 0:
-        h = gray_img.shape[0]
-        return [(i * h // expected_system_count, (i + 1) * h // expected_system_count)
-                for i in range(expected_system_count)]
-
-    dark_rows_reshaped = dark_rows.reshape(-1, 1)
-    clustering = AgglomerativeClustering(n_clusters=expected_system_count).fit(dark_rows_reshaped)
-
-    system_bounds = []
-    for i in range(expected_system_count):
-        cluster_rows = dark_rows[clustering.labels_ == i]
-        system_bounds.append((cluster_rows.min(), cluster_rows.max()))
-
-    system_bounds.sort(key=lambda x: x[0])
-    return system_bounds
-
-def measure_bar_total_thickness(gray_img, x, top_staff, bottom_staff, darkness_threshold=100, slice_width=20):
-    y_start = top_staff
-    y_end = bottom_staff
-    half_width = slice_width // 2
-
-    x_start = max(x - half_width, 0)
-    x_end = min(x + half_width + 1, gray_img.shape[1])
-
-    # Extract vertical slice of the system image
-    slice_img = gray_img[y_start:y_end, x_start:x_end]
-
-    # Binarize by darkness threshold (dark = True)
-    binary = slice_img < darkness_threshold
-
-    # Sum black pixels column-wise (vertically)
-    col_sum = np.sum(binary, axis=0)
-
-    # Consider columns with more than 50% dark pixels as dark columns
-    dark_cols = col_sum > ((y_end - y_start) / 2)
-
-    # Find consecutive runs of dark columns and sum their widths
-    total_thickness = 0
-    current_run = 0
-    for val in dark_cols:
-        if val:
-            current_run += 1
+def find_staff_lines(gray_img, left_crop=0, right_crop=None, darkness_threshold=130, max_line_thickness=4):
+    if right_crop is None:
+        right_crop = gray_img.shape[1]
+    cropped = gray_img[:, left_crop:right_crop]
+    row_avgs = np.mean(cropped, axis=1)
+    dark_rows = np.where(row_avgs < darkness_threshold)[0]
+    lines = []
+    start = None
+    prev = None
+    for r in dark_rows:
+        if start is None:
+            start = r
+            prev = r
+        elif r <= prev + 1 and (r - start) < max_line_thickness:
+            prev = r
         else:
-            if current_run > 0:
-                total_thickness += current_run
-                current_run = 0
-    if current_run > 0:
-        total_thickness += current_run
+            lines.append((start, prev))
+            start = r
+            prev = r
+    if start is not None:
+        lines.append((start, prev))
+    return [(s + e) // 2 for s, e in lines]
 
-    return total_thickness
+def group_staff_lines(staff_lines, lines_per_system=5, max_line_spacing=50, min_lines_per_system=3):
+    systems = []
+    staff_lines = sorted(staff_lines)
+    temp_group = [staff_lines[0]]
+    for line in staff_lines[1:]:
+        if line - temp_group[-1] <= max_line_spacing:
+            temp_group.append(line)
+        else:
+            if len(temp_group) >= min_lines_per_system:
+                systems.append((temp_group[0] - 35, temp_group[-1] + 35))
+            temp_group = [line]
+    if len(temp_group) >= min_lines_per_system:
+        systems.append((temp_group[0] - 35, temp_group[-1] + 35))
+    return systems
 
-def detect_barlines_with_thickness_filter(gray, top_staff, bottom_staff, min_height=100):
-    edges = cv2.Canny(gray, 30, 120, apertureSize=3)
-    lines = cv2.HoughLinesP(
-        edges,
-        rho=1,
-        theta=np.pi / 180,
-        threshold=40,
-        minLineLength=40,
-        maxLineGap=10
+def detect_barlines_ai_debug(image_bgr, model_id):
+    """Send image to Roboflow and draw detection boxes for debugging."""
+    height, width = image_bgr.shape[:2]
+
+    # Encode & send to Roboflow
+    _, img_encoded = cv2.imencode(".jpg", image_bgr)
+    resp = requests.post(
+        f"{API_URL}/{model_id}?api_key={ROBOFLOW_API_KEY}&format=json",
+        files={"file": img_encoded.tobytes()}
     )
+    data = resp.json()
+    print("\n--- Roboflow Response ---")
+    print(data)  # Full raw JSON for debugging
 
-    if lines is None:
-        return []
+    # Draw detections on a copy of the image
+    debug_img = image_bgr.copy()
 
-    xs = []
-    for x1, y1, x2, y2 in lines[:, 0]:
-        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-        height = abs(y2 - y1)
-        if abs(angle) > 80 and height >= min_height and x1 > 20:
-            xs.append((x1 + x2) // 2)
+    for pred in data.get("predictions", []):
+        px = int(pred["x"])
+        py = int(pred["y"])
+        pw = int(pred["width"])
+        ph = int(pred["height"])
 
-    xs = sorted(xs)
-    print(f"Detected barlines: {xs}")
+        x1 = px - pw // 2
+        y1 = py - ph // 2
+        x2 = px + pw // 2
+        y2 = py + ph // 2
 
-    # Cluster to remove duplicates
-    clustered = []
-    min_spacing = 25
-    for x in xs:
-        if not clustered or abs(x - clustered[-1]) > min_spacing:
-            clustered.append(x)
+        cv2.rectangle(debug_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(debug_img, pred.get("class", "obj"), (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
 
-    print(f"Final barlines after filtering: {clustered}")
+    return data
 
-    # Check thickness for each barline using new total thickness method
-    bars_with_thickness = []
-    for x in clustered:
-        thickness = measure_bar_total_thickness(gray, x, top_staff, bottom_staff)
-        is_thick = thickness > 6  # Tune this threshold if needed
-        bars_with_thickness.append((x, is_thick))
-        print(f"Bar at x={x}: total thickness={thickness} pixels -> {'THICK' if is_thick else 'thin'}")
+def extract_barlines_from_response(data, img_width, crop_width):
+    """Return list of x-coordinates in the original cropped image scale."""
+    x_positions = []
+    for pred in data.get("predictions", []):
+        # Scale the x position from Roboflow output to our cropped image
+        x_scaled = int(pred["x"] * (crop_width / data["image"]["width"]))
+        x_positions.append(x_scaled)
+    return sorted(x_positions)
 
-    # Filter out repeat bars (thick + thin pairs within close proximity)
-    final_bars = []
-    used_indices = set()
-    for i, (x_i, thick_i) in enumerate(bars_with_thickness):
-        if i in used_indices:
-            continue
-        is_repeat = False
-        for j in range(i + 1, len(bars_with_thickness)):
-            x_j, thick_j = bars_with_thickness[j]
-            if abs(x_i - x_j) < 14 and thick_i != thick_j:
-                print(f"Excluding repeat pair: x={x_i} and x={x_j}")
-                used_indices.add(i)
-                used_indices.add(j)
-                is_repeat = True
-                break
-        if not is_repeat:
-            final_bars.append((x_i, thick_i))
-
-    print(f"Bars after repeat filtering: {[x for x, _ in final_bars]}")
-
-    return final_bars
-
-def find_staff_vertical_bounds(system_img):
-    hist = cv2.reduce(system_img, 1, cv2.REDUCE_AVG).flatten()
-    threshold = 200
-    staff_rows = np.where(hist < threshold)[0]
-    if len(staff_rows) == 0:
-        return 0, system_img.shape[0]
-    return staff_rows[0], staff_rows[-1]
-
-@app.route("/upload", methods=["POST"])
+@app.route('/upload', methods=['POST'])
 def process_image():
-    uploaded_file = request.files.get("image")
-    if not uploaded_file:
-        return "No file uploaded", 400
+    clef_type = request.form.get("clef_type", "single").lower()  # dropdown from frontend
 
-    clef_type = request.form.get("clef_type", "double")
-    measure_count = int(request.form.get("measure_start", 1))
-    min_bar_height = 100 if clef_type == "double" else 40
+    if clef_type == "single":
+        model_id = MODEL_SINGLE
+        lines_per_system = 5
+    else:
+        model_id = MODEL_DOUBLE
+        lines_per_system = 10
 
-    np_img = np.frombuffer(uploaded_file.read(), np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    file = request.files['image']
+    file_bytes = np.frombuffer(file.read(), np.uint8)
+    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    system_bounds = find_system_bounds(gray, expected_system_count=5)
+    # Crop horizontal whitespace
+    left, right = crop_horizontal_whitespace(gray)
+    cropped_gray = gray[:, left:right]
 
-    for top, bottom in system_bounds:
-        system_img = gray[top:bottom]
-        top_staff, bottom_staff = find_staff_vertical_bounds(system_img)
+    # Find and group staff lines
+    staff_lines = find_staff_lines(cropped_gray, left_crop=0, right_crop=right - left)
+    systems = group_staff_lines(staff_lines, lines_per_system=lines_per_system)
 
-        barlines = detect_barlines_with_thickness_filter(system_img, top_staff, bottom_staff, min_bar_height)
+    # ✅ Get starting measure number ONCE
+    measure_start_raw = request.form.get("measure_start", "1")
+    try:
+        measure_start = int(measure_start_raw)
+    except ValueError:
+        measure_start = 1
 
-        if barlines:
-            barlines = barlines[:-1]  # Remove rightmost
+    measure_count = measure_start - 1  # global counter
 
-        prev_x = -100
-        min_dist = 15
+    for idx, (top, bottom) in enumerate(systems):
+        # Crop system region for AI
+        system_crop_bgr = image[top:bottom, left:right]
 
-        for x, is_thick in barlines:
-            if is_thick:
-                continue
-            if x - prev_x > min_dist:
-                cv2.line(img, (x, top + top_staff), (x, top + bottom_staff), (255, 0, 0), 1)
-                cv2.putText(
-                    img,
-                    str(measure_count),
-                    (x + 5, top + top_staff - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 0, 255),
-                    2
-                )
-                measure_count += 1
-                prev_x = x
+        # Detect barlines with AI (returns list of x-coordinates)
+        data = detect_barlines_ai_debug(system_crop_bgr, model_id)
+        bars_x = extract_barlines_from_response(
+            data,
+            system_crop_bgr.shape[1],
+            system_crop_bgr.shape[1]
+        )
 
-    _, img_encoded = cv2.imencode('.png', img)
-    response = send_file(io.BytesIO(img_encoded.tobytes()), mimetype='image/png')
-    response.headers['X-Measure-Count'] = str(measure_count)  # Add custom header
+        # Annotate barlines and measure numbers
+        for x in bars_x:
+            measure_count += 1
+            measure_num = measure_count
+
+            pos = (int(x + left - 20), int(top + 15))  # position label
+
+            # Draw white border
+            cv2.putText(
+                image,
+                str(measure_num),
+                pos,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                10,
+                cv2.LINE_AA
+            )
+
+            # Draw black text
+            cv2.putText(
+                image,
+                str(measure_num),
+                pos,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 0),
+                1,
+                cv2.LINE_AA
+            )
+
+    # Encode and return
+    _, buffer = cv2.imencode('.png', image)
+    io_buf = io.BytesIO(buffer)
+    response = make_response(send_file(io_buf, mimetype='image/png', as_attachment=False))
+    response.headers['X-Measure-Count'] = str(measure_count + 1)
     return response
 
-    # If only one, send PNG normally
-    return send_file(io.BytesIO(processed_images[0]), mimetype='image/png')
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
